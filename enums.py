@@ -1,0 +1,26 @@
+class OrderStatus:
+    INIT = 'init'
+    PENDING = 'pending'
+    IN_PROGRESS = 'in_progress'
+    SUCCESS = 'success'
+
+
+class QueueName:
+    ORDER = 'order'
+    PRODUCT = 'product'
+
+
+class EventStatus:
+    RESERVE_BUYER_CREDIT = 'reserve_buyer_wallet'
+    REVERT_RESERVE_BUYER_CREDIT = 'revert_reserve_buyer_wallet'
+    APPROVE_ORDER_PENDING = 'approve_order_pending'
+
+    _queue_mapping = {
+        RESERVE_BUYER_CREDIT: 'user',
+        APPROVE_ORDER_PENDING: 'order',
+        REVERT_RESERVE_BUYER_CREDIT: 'product',
+    }
+
+    @classmethod
+    def get_queue(cls, name):
+        return cls._queue_mapping[name]
