@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, and_
 
 import celeryconfig
 from enums import EventStatus
-from models import BuyerWallet, ProcessedEvent
+from models import BuyerWallet, ProcessedEvent, SellerWallet
 
 DB_HOST = os.getenv("DB_HOST")
 DB_NAME = os.getenv("DB_NAME")
@@ -197,7 +197,7 @@ def transfer_to_seller_balance(self, order_id, seller_id, product_amount, buyer_
         try:
             with db_session.begin():
                 # Lock DB row
-                seller_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(seller_id=seller_id).first()
+                seller_wallet = db_session.query(SellerWallet).with_for_update().filter_by(seller_id=seller_id).first()
                 seller_wallet.balance += decimal_product_amount
                 db_session.flush()
                 history = ProcessedEvent(

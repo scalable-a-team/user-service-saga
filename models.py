@@ -14,6 +14,13 @@ class BuyerWallet(Base):
     balance = Column(Numeric(precision=12, scale=2), nullable=True)
 
 
+class SellerWallet(Base):
+    __tablename__ = 'seller_wallets'
+    id = Column(Integer, primary_key=True)
+    seller_id = Column(UUID(as_uuid=True))
+    balance = Column(Numeric(precision=12, scale=2), nullable=True)
+
+
 class ProcessedEvent(Base):
     __tablename__ = 'processed_event'
     event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
