@@ -58,7 +58,7 @@ logger = get_task_logger(__name__)
 
 @app.task(name=EventStatus.RESERVE_BUYER_CREDIT, bind=True)
 def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, product_amount):
-    product_amount = decimal.Decimal(product_amount)
+    decimal_product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.RESERVE_BUYER_CREDIT
     logger.info(f"Receive Buyer ID: {buyer_id}, Product ID: {product_id}, Order ID: {order_id}")
     db_session = Session()
@@ -94,10 +94,10 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
             with db_session.begin():
                 # Lock DB row
                 buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(buyer_id=buyer_id).first()
-                if buyer_wallet.balance < product_amount:
+                if buyer_wallet.balance < decimal_product_amount:
                     raise Exception(f"User balance not enough. User balance: {buyer_wallet.balance},"
                                     f" Product amount: {product_amount}")
-                buyer_wallet.balance -= product_amount
+                buyer_wallet.balance -= decimal_product_amount
                 db_session.flush()
                 history = ProcessedEvent(
                     chain_id=order_id,
