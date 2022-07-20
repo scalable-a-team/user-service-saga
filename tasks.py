@@ -1,3 +1,4 @@
+import decimal
 import os
 
 from celery import Celery
@@ -57,6 +58,7 @@ logger = get_task_logger(__name__)
 
 @app.task(name=EventStatus.RESERVE_BUYER_CREDIT, bind=True)
 def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, product_amount):
+    product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.RESERVE_BUYER_CREDIT
     logger.info(f"Receive Buyer ID: {buyer_id}, Product ID: {product_id}, Order ID: {order_id}")
     db_session = Session()
