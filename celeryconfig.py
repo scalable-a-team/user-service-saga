@@ -9,4 +9,6 @@ task_reject_on_worker_lost = True
 
 task_routes = {
     'tasks.reserve_buyer_credit': {'queue': 'user'},
+    'tasks.refund_buyer': {'queue': 'user'},
+    'tasks.transfer_to_seller_balance': {'queue': 'user'},
 }

@@ -15,6 +15,8 @@ class EventStatus:
     REVERT_RESERVE_BUYER_CREDIT = 'revert_reserve_buyer_wallet'
     REVERT_CREATE_ORDER = 'revert_create_order'
     APPROVE_ORDER_PENDING = 'approve_order_pending'
+    TRANSFER_TO_SELLER_BALANCE = 'transfer_to_seller_balance'
+    REFUND_BUYER = 'refund_buyer'
 
     _queue_mapping = {
         RESERVE_BUYER_CREDIT: 'user',
