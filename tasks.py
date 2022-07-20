@@ -111,7 +111,6 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
         except Exception as e:
             logger.error(e)
             logger.info(f"{current_event} failed for Buyer ID: {buyer_id} Product ID: {product_id}")
-            raise e
 
     if transaction_success:
         with tracer.start_span(name=f"send_task {EventStatus.APPROVE_ORDER_PENDING}"):
