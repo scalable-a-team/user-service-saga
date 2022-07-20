@@ -40,16 +40,14 @@ def init_celery_tracing(*args, **kwargs):
     global tracer
     global PROPAGATOR
     resource = Resource.create(attributes={
-        "service.name": "OrderSagaWorker"
+        "service.name": "UserSagaWorker"
     })
     trace.set_tracer_provider(TracerProvider(resource=resource))
     span_processor = BatchSpanProcessor(
         OTLPSpanExporter(endpoint=os.getenv('OTEL_EXPORTER_OTLP_ENDPOINT'), insecure=True)
     )
     trace.get_tracer_provider().add_span_processor(span_processor)
-    SQLAlchemyInstrumentor().instrument(
-        engine=engine,
-    )
+    SQLAlchemyInstrumentor().instrument(engine=engine)
     CeleryInstrumentor().instrument()
     tracer = trace.get_tracer(__name__)
     PROPAGATOR = propagate.get_global_textmap()
@@ -62,12 +60,13 @@ logger = get_task_logger(__name__)
 
 @app.task(name=EventStatus.RESERVE_BUYER_CREDIT, bind=True)
 def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, product_amount):
+    current_event = EventStatus.RESERVE_BUYER_CREDIT
     logger.info(f"Receive Buyer ID: {buyer_id}, Product ID: {product_id}, Order ID: {order_id}")
     db_session = Session()
 
     event_record = db_session.query(ProcessedEvent).filter(and_(
         ProcessedEvent.chain_id == order_id,
-        ProcessedEvent.event == EventStatus.RESERVE_BUYER_CREDIT,
+        ProcessedEvent.event == current_event,
     )).first()
     db_session.commit()
 
@@ -95,7 +94,7 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
         try:
             with db_session.begin():
                 # Lock DB row
-                buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(id=buyer_id).first()
+                buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(buyer_id=buyer_id).first()
                 if buyer_wallet.balance < product_amount:
                     raise Exception(f"User balance not enough. User balance: {buyer_wallet.balance},"
                                     f" Product amount: {product_amount}")
@@ -104,7 +103,7 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
                 history = ProcessedEvent(
                     chain_id=order_id,
                     event_id=self.request.id,
-                    event=EventStatus.RESERVE_BUYER_CREDIT,
+                    event=current_event,
                     next_event=EventStatus.APPROVE_ORDER_PENDING,
                     step=0
                 )
@@ -112,7 +111,8 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
             transaction_success = True
         except Exception as e:
             logger.error(e)
-            logger.info(f"{EventStatus.RESERVE_BUYER_CREDIT} failed for Buyer ID: {buyer_id} Product ID: {product_id}")
+            logger.info(f"{current_event} failed for Buyer ID: {buyer_id} Product ID: {product_id}")
+            raise e
 
     if transaction_success:
         with tracer.start_span(name=f"send_task {EventStatus.APPROVE_ORDER_PENDING}"):
@@ -122,11 +122,11 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
                 queue=EventStatus.get_queue(EventStatus.APPROVE_ORDER_PENDING),
             )
     else:
-        next_event = EventStatus.REVERT_RESERVE_BUYER_CREDIT
+        next_event = EventStatus.REVERT_CREATE_ORDER
         history = ProcessedEvent(
             chain_id=order_id,
             event_id=self.request.id,
-            event=EventStatus.RESERVE_BUYER_CREDIT,
+            event=current_event,
             next_event=next_event,
             step=0
         )
