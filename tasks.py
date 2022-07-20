@@ -140,7 +140,7 @@ def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, produc
 
 
 @app.task(name=EventStatus.REFUND_BUYER, bind=True)
-def refund_buyer(self, order_id, buyer_id, product_amount):
+def refund_buyer(self, order_id, buyer_id, product_amount, seller_id):
     decimal_product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.REFUND_BUYER
     logger.info(f"Receive Order ID: {order_id}")
@@ -178,7 +178,7 @@ def refund_buyer(self, order_id, buyer_id, product_amount):
 
 
 @app.task(name=EventStatus.TRANSFER_TO_SELLER_BALANCE, bind=True)
-def transfer_to_seller_balance(self, order_id, seller_id, product_amount):
+def transfer_to_seller_balance(self, order_id, seller_id, product_amount, buyer_id):
     decimal_product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.TRANSFER_TO_SELLER_BALANCE
     logger.info(f"Receive Order ID: {order_id}")
