@@ -57,161 +57,170 @@ logger = get_task_logger(__name__)
 
 
 @app.task(name=EventStatus.RESERVE_BUYER_CREDIT, bind=True)
-def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, product_amount):
+def reserve_buyer_credit(self, buyer_id, product_id, order_id, seller_id, product_amount, context_payload):
+    ctx = PROPAGATOR.extract(carrier=context_payload)
     decimal_product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.RESERVE_BUYER_CREDIT
-    logger.info(f"Receive Buyer ID: {buyer_id}, Product ID: {product_id}, Order ID: {order_id}")
-    db_session = Session()
 
-    event_record = db_session.query(ProcessedEvent).filter(and_(
-        ProcessedEvent.chain_id == order_id,
-        ProcessedEvent.event == current_event,
-    )).first()
-    db_session.commit()
+    with tracer.start_as_current_span(f"SAGA {current_event}", context=ctx):
+        logger.info(f"Receive Buyer ID: {buyer_id}, Product ID: {product_id}, Order ID: {order_id}")
+        db_session = Session()
 
-    payload = {
-        'order_id': order_id,
-        'product_id': product_id,
-        'buyer_id': buyer_id,
-        'seller_id': seller_id,
-        'product_amount': product_amount
-    }
-    # If event is already processed, we skip the event processing
-    # but fire the next event just in-case the next-published message is lost
-    if event_record is not None:
-        with tracer.start_span(name=f"send_task {event_record.next_event}"):
-            app.send_task(
-                event_record.next_event,
-                kwargs=payload,
-                queue=EventStatus.get_queue(event_record.next_event),
-            )
-            return payload
-
-    transaction_success = False
-
-    with tracer.start_span(name="Execute DB Transaction"):
-        try:
-            with db_session.begin():
-                # Lock DB row
-                buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(buyer_id=buyer_id).first()
-                if buyer_wallet.balance < decimal_product_amount:
-                    raise Exception(f"User balance not enough. User balance: {buyer_wallet.balance},"
-                                    f" Product amount: {product_amount}")
-                buyer_wallet.balance -= decimal_product_amount
-                db_session.flush()
-                history = ProcessedEvent(
-                    chain_id=order_id,
-                    event_id=self.request.id,
-                    event=current_event,
-                    next_event=EventStatus.APPROVE_ORDER_PENDING,
-                    step=0
-                )
-                db_session.add(history)
-            transaction_success = True
-        except Exception as e:
-            logger.error(e)
-            logger.info(f"{current_event} failed for Buyer ID: {buyer_id} Product ID: {product_id}")
-
-    if transaction_success:
-        with tracer.start_span(name=f"send_task {EventStatus.APPROVE_ORDER_PENDING}"):
-            app.send_task(
-                EventStatus.APPROVE_ORDER_PENDING,
-                kwargs=payload,
-                queue=EventStatus.get_queue(EventStatus.APPROVE_ORDER_PENDING),
-            )
-    else:
-        next_event = EventStatus.REVERT_CREATE_ORDER
-        history = ProcessedEvent(
-            chain_id=order_id,
-            event_id=self.request.id,
-            event=current_event,
-            next_event=next_event,
-            step=0
-        )
-        db_session.add(history)
+        event_record = db_session.query(ProcessedEvent).filter(and_(
+            ProcessedEvent.chain_id == order_id,
+            ProcessedEvent.event == current_event,
+        )).first()
         db_session.commit()
-        with tracer.start_span(name=f"send_task {next_event}"):
-            app.send_task(
-                next_event,
-                kwargs=payload,
-                queue=EventStatus.get_queue(next_event),
+
+        payload = {
+            'order_id': order_id,
+            'product_id': product_id,
+            'buyer_id': buyer_id,
+            'seller_id': seller_id,
+            'product_amount': product_amount,
+            'context_payload': context_payload
+        }
+        # If event is already processed, we skip the event processing
+        # but fire the next event just in-case the next-published message is lost
+        if event_record is not None:
+            with tracer.start_span(name=f"send_task {event_record.next_event}"):
+                app.send_task(
+                    event_record.next_event,
+                    kwargs=payload,
+                    queue=EventStatus.get_queue(event_record.next_event),
+                )
+                return payload
+
+        transaction_success = False
+
+        with tracer.start_span(name="Execute DB Transaction"):
+            try:
+                with db_session.begin():
+                    # Lock DB row
+                    buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(buyer_id=buyer_id).first()
+                    if buyer_wallet.balance < decimal_product_amount:
+                        raise Exception(f"User balance not enough. User balance: {buyer_wallet.balance},"
+                                        f" Product amount: {product_amount}")
+                    buyer_wallet.balance -= decimal_product_amount
+                    db_session.flush()
+                    history = ProcessedEvent(
+                        chain_id=order_id,
+                        event_id=self.request.id,
+                        event=current_event,
+                        next_event=EventStatus.APPROVE_ORDER_PENDING,
+                        step=0
+                    )
+                    db_session.add(history)
+                transaction_success = True
+            except Exception as e:
+                logger.error(e)
+                logger.info(f"{current_event} failed for Buyer ID: {buyer_id} Product ID: {product_id}")
+
+        if transaction_success:
+            with tracer.start_span(name=f"send_task {EventStatus.APPROVE_ORDER_PENDING}"):
+                app.send_task(
+                    EventStatus.APPROVE_ORDER_PENDING,
+                    kwargs=payload,
+                    queue=EventStatus.get_queue(EventStatus.APPROVE_ORDER_PENDING),
+                )
+        else:
+            next_event = EventStatus.REVERT_CREATE_ORDER
+            history = ProcessedEvent(
+                chain_id=order_id,
+                event_id=self.request.id,
+                event=current_event,
+                next_event=next_event,
+                step=0
             )
-    return payload
+            db_session.add(history)
+            db_session.commit()
+            with tracer.start_span(name=f"send_task {next_event}"):
+                app.send_task(
+                    next_event,
+                    kwargs=payload,
+                    queue=EventStatus.get_queue(next_event),
+                )
+        return payload
 
 
 @app.task(name=EventStatus.REFUND_BUYER, bind=True)
-def refund_buyer(self, order_id, buyer_id, product_amount, seller_id):
+def refund_buyer(self, order_id, buyer_id, product_amount, seller_id, context_payload):
+    ctx = PROPAGATOR.extract(carrier=context_payload)
     decimal_product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.REFUND_BUYER
-    logger.info(f"Receive Order ID: {order_id}")
-    db_session = Session()
 
-    event_record = db_session.query(ProcessedEvent).filter(and_(
-        ProcessedEvent.chain_id == order_id,
-        ProcessedEvent.event == current_event,
-    )).first()
-    db_session.commit()
+    with tracer.start_as_current_span(f"SAGA {current_event}", context=ctx):
+        logger.info(f"Receive Order ID: {order_id}")
+        db_session = Session()
 
-    if event_record is not None:
-        return
+        event_record = db_session.query(ProcessedEvent).filter(and_(
+            ProcessedEvent.chain_id == order_id,
+            ProcessedEvent.event == current_event,
+        )).first()
+        db_session.commit()
+
+        if event_record is not None:
+            return
 
 
-    with tracer.start_span(name="Execute DB Transaction"):
-        try:
-            with db_session.begin():
-                # Lock DB row
-                buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(buyer_id=buyer_id).first()
-                buyer_wallet.balance += decimal_product_amount
-                db_session.flush()
-                history = ProcessedEvent(
-                    chain_id=order_id,
-                    event_id=self.request.id,
-                    event=current_event,
-                    next_event=None,
-                    step=0
-                )
-                db_session.add(history)
-        except Exception as e:
-            logger.error(e)
-            logger.info(f"{current_event} failed for Buyer ID: {buyer_id}")
-            raise e
+        with tracer.start_span(name="Execute DB Transaction"):
+            try:
+                with db_session.begin():
+                    # Lock DB row
+                    buyer_wallet = db_session.query(BuyerWallet).with_for_update().filter_by(buyer_id=buyer_id).first()
+                    buyer_wallet.balance += decimal_product_amount
+                    db_session.flush()
+                    history = ProcessedEvent(
+                        chain_id=order_id,
+                        event_id=self.request.id,
+                        event=current_event,
+                        next_event=None,
+                        step=0
+                    )
+                    db_session.add(history)
+            except Exception as e:
+                logger.error(e)
+                logger.info(f"{current_event} failed for Buyer ID: {buyer_id}")
+                raise e
 
 
 @app.task(name=EventStatus.TRANSFER_TO_SELLER_BALANCE, bind=True)
-def transfer_to_seller_balance(self, order_id, seller_id, product_amount, buyer_id):
+def transfer_to_seller_balance(self, order_id, seller_id, product_amount, buyer_id, context_payload):
+    ctx = PROPAGATOR.extract(carrier=context_payload)
     decimal_product_amount = decimal.Decimal(product_amount)
     current_event = EventStatus.TRANSFER_TO_SELLER_BALANCE
-    logger.info(f"Receive Order ID: {order_id}")
-    db_session = Session()
+    with tracer.start_as_current_span(f"SAGA {current_event}", context=ctx):
+        logger.info(f"Receive Order ID: {order_id}")
+        db_session = Session()
 
-    event_record = db_session.query(ProcessedEvent).filter(and_(
-        ProcessedEvent.chain_id == order_id,
-        ProcessedEvent.event == current_event,
-    )).first()
-    db_session.commit()
+        event_record = db_session.query(ProcessedEvent).filter(and_(
+            ProcessedEvent.chain_id == order_id,
+            ProcessedEvent.event == current_event,
+        )).first()
+        db_session.commit()
 
-    if event_record is not None:
-        return
+        if event_record is not None:
+            return
 
-    with tracer.start_span(name="Execute DB Transaction"):
-        try:
-            with db_session.begin():
-                # Lock DB row
-                seller_wallet = db_session.query(SellerWallet).with_for_update().filter_by(seller_id=seller_id).first()
-                seller_wallet.balance += decimal_product_amount
-                db_session.flush()
-                history = ProcessedEvent(
-                    chain_id=order_id,
-                    event_id=self.request.id,
-                    event=current_event,
-                    next_event=None,
-                    step=0
-                )
-                db_session.add(history)
-        except Exception as e:
-            logger.error(e)
-            logger.info(f"{current_event} failed for Order ID: {order_id}")
-            raise e
+        with tracer.start_span(name="Execute DB Transaction"):
+            try:
+                with db_session.begin():
+                    # Lock DB row
+                    seller_wallet = db_session.query(SellerWallet).with_for_update().filter_by(seller_id=seller_id).first()
+                    seller_wallet.balance += decimal_product_amount
+                    db_session.flush()
+                    history = ProcessedEvent(
+                        chain_id=order_id,
+                        event_id=self.request.id,
+                        event=current_event,
+                        next_event=None,
+                        step=0
+                    )
+                    db_session.add(history)
+            except Exception as e:
+                logger.error(e)
+                logger.info(f"{current_event} failed for Order ID: {order_id}")
+                raise e
 
 
 def _header_from_carrier(carrier, key):
